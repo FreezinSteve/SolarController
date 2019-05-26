@@ -48,7 +48,7 @@ const char* neonURL = "restservice-neon.niwa.co.nz";
 const char* contentType = "application/json";
 const char* importDataPath = "/NeonRESTService.svc/ImportData/4063?LoggerType=1";
 const char* getSessionPath = "/NeonRESTService.svc/PostSession";
-
+int neonPushInterval = 15;   // 15 minute push rate
 //================================================================
 // NTP time synch
 #include <WiFiUdp.h>
@@ -157,6 +157,8 @@ void loop() {
 
     if (unoTimer < millis())
     {
+      // Capture the current minute (UNO interrogation may take longer than a minute)
+      int currMinute = minute();
       if (boostCount > 0)
       {
         // Refresh now
@@ -178,7 +180,11 @@ void loop() {
         if (checkJSON(data))
         {
           parseJSON(data);
-          pushToNeon();
+          // Only push event "n" minutes
+          if ((currMinute % neonPushInterval) == 0)
+          {
+            pushToNeon();
+          }          
           unoError = 0;
         }
         else
