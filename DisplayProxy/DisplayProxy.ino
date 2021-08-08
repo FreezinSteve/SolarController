@@ -54,7 +54,7 @@ int neonPushInterval = 15;   // 15 minute push rate
 #include <WiFiUdp.h>
 #include <TimeLib.h>
 #include <ESP8266WiFi.h>
-static const char ntpServerName[] = "time.nist.gov";
+static const char ntpServerName[] = "192.168.1.130";
 const int timeZone = 0;     // UTC
 const unsigned int localPort = 8888;  // local port to listen for UDP packets
 const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
@@ -184,7 +184,7 @@ void loop() {
           if ((currMinute % neonPushInterval) == 0)
           {
             pushToNeon();
-          }          
+          }
           unoError = 0;
         }
         else
@@ -225,28 +225,28 @@ int getNextUNOUpdateTime()
 
 bool getSolarDataFromUNO(char* buff)
 {
-  for (int retry = 0; retry < 2; retry++)
-  {
-    if (startCommandMode())
-    {
-      if (connect())
-      {
-        if (boostCount > 0)
-        {
-          toggleBoost();
-        }
-        readUNO(buff);
-        startCommandMode();
-        hangUp();
-        return true;
-      }
-      else
-      {
-        reboot();
-      }
-    }
-  }
-  return false;
+  //  for (int retry = 0; retry < 2; retry++)
+  //  {
+  //    if (startCommandMode())
+  //    {
+  //      if (connect())
+  //      {
+  //        if (boostCount > 0)
+  //        {
+  //          toggleBoost();
+  //        }
+  readUNO(buff);
+  //        startCommandMode();
+  //        hangUp();
+  return true;
+  //      }
+  //      else
+  //      {
+  //        reboot();
+  //      }
+  //}
+  //}
+  //return false;
 }
 
 boolean startCommandMode()
@@ -461,6 +461,7 @@ void parseJSON(char* json)
   strcpy(mNeonData[3], root["WB"]);
   strcpy(mNeonData[4], root["MC"]);
   strcpy(mNeonData[5], root["SC"]);
+  // Rough conversion of pumptime x dTemp to energy. Depends on pump rate really, just a guess
   float heat = strtof(root["HA"], NULL) * 0.000177;
   char heatStr[10];
   dtostrf(heat , 1, 2, heatStr);
@@ -686,7 +687,7 @@ char* getISO8601Time(boolean zeroSeconds)
 //==============================================================================
 int pushToNeon()
 {
-  RestClient client = RestClient(neonURL, proxyAddr, proxyPort);  
+  RestClient client = RestClient(neonURL, proxyAddr, proxyPort);
   client.setContentType(contentType);
   char sessionHeader[70];
   int httpStatus = getSessionToken(client, sessionHeader);

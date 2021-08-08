@@ -15,7 +15,7 @@
    - Pump Supply (cold supply to pump)
    - Vent solenoid
    - HWC Control
-   - Cylinder circulation pump
+   -
 
    Operation:
    State machine
@@ -34,6 +34,7 @@
 */
 
 #include <EEPROM.h>
+#include <avr/wdt.h>
 
 // Channel allocation
 const int PANEL_CHAN = A0;
@@ -50,6 +51,8 @@ const int HSIO_SYNC = 3;
 const int HSIO_CLCK = 4;
 const int HSIO_DATA = 5;
 const int SCAN_LED = 13;
+const int DRAIN_SWITCH = 6;
+
 
 // HSIO Relay module output BIT mapping
 const unsigned int PUMP_ON = 32768;  // RELAY 1
@@ -76,7 +79,7 @@ const int DRAIN_TIMEOUT  = 60;        // Drain time in seconds
 const int DRAIN_RETRY = 3600;         // Retry drain every hour
 const int HOT_COLD_DIFF = 1;          // If HOT_IN < COLD_OUT + HOT_COLD_DIFF then stop pumping
 const int MAX_PUMP_RUNTIME = 300;     // 300 cycles ~ 5 minutes
-const int MAX_PUMP_WAITTIME = 300;    // 300 cycles ~ 5 minutes
+const int MAX_PUMP_WAITTIME = 150;    // 300 cycles ~ 2.5 minutes
 const int MAX_BYPASS_WAITTIME = 60;
 const int REFILL_DRAIN_TIME = 5;      // Drain for a few seconds while refilling to get water flowing
 const int REFILL_WAITTIME = 60;
@@ -92,8 +95,6 @@ const int HWC_CIRC_STOP_DIFF = 5;     // Stop HWC circulation pump if diff < 'x'
 const int SOLAR_ON_MAXTIMER = 3600;   // After "n" then assume that there's no solar available
 const int SOLAR_DUMP_START = 95;      // Start dumping solar cylinder above this temperature
 const int SOLAR_DUMP_STOP = 80;       // Stop dumping below this temperature
-const int ERR_PUMP_RUNTIME = 120;     // 120 cycles ~ 2 minutes
-const int ERR_PUMP_WAITTIME = 120;    // 120 cycles ~ 2 minutes
 
 // resistance at 25 degrees C
 #define THERMISTORNOMINAL 10000
@@ -144,6 +145,7 @@ void setup() {
   pinMode(WETBACK_CHAN, INPUT);
   pinMode(MAIN_CYL_CHAN, INPUT);
   pinMode(SOLAR_CYL_CHAN, INPUT);
+  pinMode(DRAIN_SWITCH, INPUT_PULLUP);
 
   pinMode(BT_ENABLE, OUTPUT);
   pinMode(HSIO_SYNC, OUTPUT);
@@ -154,16 +156,27 @@ void setup() {
   // Enable Bluetooth
   digitalWrite(BT_ENABLE, HIGH);
   state = 1;
+
+  // FUDGE
+  //EEPROMWritelong(EEPROM_ADDR,7488644);
+
   heatAccumulator = EEPROMReadlong(EEPROM_ADDR);
+
+  wdt_enable(WDTO_8S);     // enable the watchdog for 8 seconds (max possible)
 }
 
 void loop() {
+
+  wdt_reset();  // Kick the watchdog
 
   // Check for incoming commands
   if (Serial.available() > 0) {
     command = Serial.read();
     processCommand();
   }
+
+  // Manual control switches can override behaviour
+  checkDrainSwitch();
 
   long ms = millis();
   if (ms > nextScan)
@@ -199,14 +212,14 @@ void scan()
         case 3:   // PUMP
           state3();
           break;
-        case 4:   // POST PUMP WAIT        
+        case 4:   // POST PUMP WAIT
           state4();
           break;
-        //==============================        
+        //==============================
         case 6:   // OVERHEAT
-          state6();          
+          state6();
           break;
-        //==============================          
+        //==============================
         case 10:  // FROST
           state10();
           break;
@@ -216,20 +229,20 @@ void scan()
         case 12:  // REFILL
           state12();
           break;
-        //==============================  
+        //==============================
         default:
           state = 1;
           break;
       }
       // See if we need to circulate between the main and solar cylinders
-      checkCirculationPump();  
+      checkCirculationPump();
     }
     else
     {
       sensorError();
     }
     timeSinceLastPump++;
-    checkBoost();    
+    checkBoost();
   }
   setOutputs();
 }
@@ -322,8 +335,8 @@ void state1()
   if (solar_cyl_temp > SOLAR_DUMP_START)
   {
     timer = 0;
-    state = 20;
-    return;  
+    state = 6;
+    return;
   }
 
   double maxTemp = cold_out_temp + PANEL_DIFF;
@@ -333,6 +346,7 @@ void state1()
   }
   if (panel_temp > maxTemp)
   {
+    timer = 0;
     state = 2;
   }
   else if (panel_temp < PANEL_FROST)
@@ -350,7 +364,12 @@ void state2()
   controlWord += PUMP_ON;
   controlWord += BYPASS_ON;
   controlWord += COLD_ON;   // Turn on cold to ensure that the pump stays primed if there's still air in the line
-  if (hot_in_temp > (cold_out_temp + HOT_COLD_DIFF))
+  if (timer < 10)
+  {
+    // Wait 10 seconds to equilibrate temps
+    timer++;
+  }
+  else if (hot_in_temp > (cold_out_temp + HOT_COLD_DIFF))
   {
     state = 3;
     timer = 0;
@@ -362,10 +381,10 @@ void state2()
   }
   else
   {
-    if (timer < 30)
-    {
-      controlWord += VENT_ON;
-    }
+    //if (timer < 30)
+    //{
+    //  controlWord += VENT_ON;   // Don't think we need this. The automatic bleed valve should handle this
+    //}
     timer++;
   }
 }
@@ -382,7 +401,7 @@ void state3()
     // Pump finished, save accumuation
     heatAccumulator += cycleHeatAccumulator;
     cycleHeatAccumulator = 0;
-    EEPROMWritelong(EEPROM_ADDR, heatAccumulator);        
+    EEPROMWritelong(EEPROM_ADDR, heatAccumulator);
   }
   else if (timer > MAX_PUMP_RUNTIME)
   {
@@ -390,8 +409,8 @@ void state3()
     timer = 0;
     // Pump finished, save accumuation
     heatAccumulator += cycleHeatAccumulator;
-    cycleHeatAccumulator = 0;    
-    EEPROMWritelong(EEPROM_ADDR, heatAccumulator);        
+    cycleHeatAccumulator = 0;
+    EEPROMWritelong(EEPROM_ADDR, heatAccumulator);
   }
   else
   {
@@ -434,7 +453,7 @@ void state6()
   {
     controlWord += DRAIN_ON;
     controlWord += COLD_ON;
-  }  
+  }
 }
 
 //=======================================================================
@@ -511,11 +530,11 @@ void sensorError()
   if (timer < MAX_PUMP_RUNTIME)
   {
     controlWord += COLD_ON;
-    controlWord += PUMP_ON;    
+    controlWord += PUMP_ON;
   }
-  else if(timer < (ERR_PUMP_RUNTIME + ERR_PUMP_WAITTIME))
+  else if (timer < (MAX_PUMP_RUNTIME + MAX_PUMP_WAITTIME))
   {
-    // Do nothing, waiting     
+    // Do nothing, waiting
   }
   else
   {
@@ -612,7 +631,9 @@ void checkBoost()
     }
   }
 
-  if (boostState > 0)
+  // Note: HWC relay wired into N/C so that on downpowering controller, HWC is ON
+  //if (boostState > 0)
+  if (boostState == 0)
   {
     controlWord += HWC_ON;
   }
@@ -656,7 +677,7 @@ void setWetbackOrSolarStates()
 void checkCirculationPump()
 {
   if (circulating)
-  {    
+  {
     // Still circulating, check to see if time to stop
     if (solar_cyl_temp < (main_cyl_temp + HWC_CIRC_STOP_DIFF))
     {
@@ -665,16 +686,16 @@ void checkCirculationPump()
     else
     {
       // Keep pumping
-      controlWord+=HWC_PUMP;
+      controlWord += HWC_PUMP;
     }
   }
   else
   {
-      // Not circulating
+    // Not circulating
     if (solar_cyl_temp > (main_cyl_temp + HWC_CIRC_START_DIFF))
-    {      
+    {
       circulating = true;
-    }      
+    }
   }
 }
 
@@ -710,9 +731,9 @@ void outputReadingsJson()
     }
   }
   Serial.print("\", \"DM\": \"");
-  Serial.print("0"); 
+  Serial.print("0");
   Serial.print("\", \"SM\": \"");
-  Serial.print("0"); 
+  Serial.print("0");
   Serial.print("\", \"HA\": \"");
   Serial.print(heatAccumulator);
   Serial.print("\", \"BS\": \"");
@@ -773,6 +794,33 @@ void processCommand()
   }
 }
 
+void checkDrainSwitch()
+{
+  if (digitalRead(DRAIN_SWITCH) == LOW)
+  {
+    // Manual drain switch ON
+    if (state != 10 && state != 11)
+    {
+      Serial.println("#DRAINON");
+      Serial.println("#EMPTY");
+      // force into DRAIN state.
+      state = 10;
+      timer = 0;
+    }
+  }
+  else
+  {
+    // Manual drain switch OFF
+    if (state == 10)
+    {
+      //Serial.println("#DRAINOFF");
+      // Force into state 11. If the panel is warm enough control will restart and
+      // the panel refilled
+      state == 11;
+      timer = 0;
+    }
+  }
+}
 
 //===========================================================================
 //This function will write a 4 byte (32bit) long to the eeprom at
@@ -804,4 +852,3 @@ uint32_t EEPROMReadlong(int address)
   //Return the recomposed long by using bitshift.
   return ((four << 0) & 0xFF) + ((three << 8) & 0xFFFF) + ((two << 16) & 0xFFFFFF) + ((one << 24) & 0xFFFFFFFF);
 }
-

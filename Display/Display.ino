@@ -52,7 +52,8 @@ const char* getSessionPath = "/NeonRESTService.svc/PostSession";
 #include <WiFiUdp.h>
 #include <TimeLib.h>
 #include <ESP8266WiFi.h>
-static const char ntpServerName[] = "time.nist.gov";
+//static const char ntpServerName[] = "time.nist.gov";
+static const char ntpServerName[] = "192.168.1.130";
 const int timeZone = 0;     // UTC
 const unsigned int localPort = 8888;  // local port to listen for UDP packets
 const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
@@ -144,6 +145,7 @@ void setup(void) {
 
 void loop() {
 
+  // TODO: Handle millis() overflow
   if (tftTimer <= millis()) {
     tftTimer = millis() + TFT_LOOP_PERIOD;
 
