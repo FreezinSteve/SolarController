@@ -816,7 +816,7 @@ void checkDrainSwitch()
       //Serial.println("#DRAINOFF");
       // Force into state 11. If the panel is warm enough control will restart and
       // the panel refilled
-      state == 11;
+      state = 11;
       timer = 0;
     }
   }
