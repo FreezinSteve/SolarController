@@ -24,7 +24,7 @@
    STATE 3 = PUMP w/NO BYPASS
    STATE 4 = PUMPOFF, wait "n" cycles after pumping
    STATE 5 = UNUSED
-   STATE 6 = OVERHEAT
+   STATE 6 = UNUSED
    STATE 7 = UNUSED
    STATE 8 = UNUSED
    STATE 9 = UNUSED
@@ -56,12 +56,12 @@ const int DRAIN_SWITCH = 6;
 
 // HSIO Relay module output BIT mapping
 const unsigned int PUMP_ON = 32768;  // RELAY 1
-const unsigned int DRAIN_ON = 16384; // RELAY 2
+const unsigned int DRAIN_OPEN = 16384; // RELAY 2
 const unsigned int BYPASS_ON = 8192; // RELAY 3
 const unsigned int COLD_ON = 4096;   // RELAY 4
 const unsigned int VENT_ON = 2048;   // RELAY 5
 const unsigned int HWC_ON = 1024;    // RELAY 6
-const unsigned int HWC_PUMP = 512;    // RELAY 7
+const unsigned int DRAIN_CLOSE = 512;  // RELAY 7
 
 // HSIO timing
 const int HSIO_SYNC_DELAY = 10;        // time (ms) from raising SYNC to setting DATA
@@ -71,7 +71,6 @@ const int HSIO_DATA_DELAY = 1;        // time (ms) from setting DATA to setting 
 const int SCAN_RATE = 1;
 const int EEPROM_ADDR = 0;
 
-const float PANEL_MAX = 95;
 const float PANEL_DIFF = 5;            // If SOLAR_OUT + PANEL_DIFF > PANEL_TEMP then pump
 const float PANEL_FROST = 5;
 const float PANEL_DEFROST = 30;
@@ -81,7 +80,7 @@ const int HOT_COLD_DIFF = 1;          // If HOT_IN < COLD_OUT + HOT_COLD_DIFF th
 const int MAX_PUMP_RUNTIME = 300;     // 300 cycles ~ 5 minutes
 const int MAX_PUMP_WAITTIME = 150;    // 300 cycles ~ 2.5 minutes
 const int MAX_BYPASS_WAITTIME = 60;
-const int REFILL_DRAIN_TIME = 5;      // Drain for a few seconds while refilling to get water flowing
+const int REFILL_DRAIN_CLOSE_TIME = 10;  // Time to close drain valve before opening COLDOUT
 const int REFILL_WAITTIME = 60;
 const int WETBACK_ON_DIFF = 10;       // Wetback ON if > main cylinder - 'x'
 const int SOLAR_ON_DIFF = 5;          // Solar ON if > 'x' + solar cylinder
@@ -93,8 +92,6 @@ const int HWC_CIRC_START_DIFF = 10;   // Start HWC circulation pump if diff > 'x
 const int HWC_CIRC_STOP_DIFF = 5;     // Stop HWC circulation pump if diff < 'x'
 
 const int SOLAR_ON_MAXTIMER = 3600;   // After "n" then assume that there's no solar available
-const int SOLAR_DUMP_START = 95;      // Start dumping solar cylinder above this temperature
-const int SOLAR_DUMP_STOP = 80;       // Stop dumping below this temperature
 
 // resistance at 25 degrees C
 #define THERMISTORNOMINAL 10000
@@ -157,9 +154,6 @@ void setup() {
   digitalWrite(BT_ENABLE, HIGH);
   state = 1;
 
-  // FUDGE
-  //EEPROMWritelong(EEPROM_ADDR,7488644);
-
   heatAccumulator = EEPROMReadlong(EEPROM_ADDR);
 
   wdt_enable(WDTO_8S);     // enable the watchdog for 8 seconds (max possible)
@@ -216,10 +210,6 @@ void scan()
           state4();
           break;
         //==============================
-        case 6:   // OVERHEAT
-          state6();
-          break;
-        //==============================
         case 10:  // FROST
           state10();
           break;
@@ -234,8 +224,6 @@ void scan()
           state = 1;
           break;
       }
-      // See if we need to circulate between the main and solar cylinders
-      checkCirculationPump();
     }
     else
     {
@@ -331,18 +319,11 @@ float readTemperature(int channel, int sensorNumber)
 //=======================================================================
 void state1()
 {
-  // Check for solar cylinder overheat
-  if (solar_cyl_temp > SOLAR_DUMP_START)
-  {
-    timer = 0;
-    state = 6;
-    return;
-  }
 
   double maxTemp = cold_out_temp + PANEL_DIFF;
-  if (maxTemp > PANEL_MAX)
+  if (maxTemp > 95)
   {
-    maxTemp = PANEL_MAX;
+    maxTemp = 95;
   }
   if (panel_temp > maxTemp)
   {
@@ -381,10 +362,6 @@ void state2()
   }
   else
   {
-    //if (timer < 30)
-    //{
-    //  controlWord += VENT_ON;   // Don't think we need this. The automatic bleed valve should handle this
-    //}
     timer++;
   }
 }
@@ -415,7 +392,7 @@ void state3()
   else
   {
     // Accumulate heat received (assume const. pump rate this is change in heat per second)
-    // we'd need to know the pump rate to convert this to kW
+    // we'd need to know the pump rate to convert this to kWhr
     //heatAccumulator += (hot_in_temp - cold_out_temp);
     cycleHeatAccumulator += (hot_in_temp - cold_out_temp);
     controlWord += PUMP_ON;
@@ -438,23 +415,6 @@ void state4()
   }
 }
 
-//=======================================================================
-// Solar cylinder over temperature. Drain until below safe level
-//=======================================================================
-void state6()
-{
-  // Check for solar cylinder temperature dropped to safe level
-  if (solar_cyl_temp < SOLAR_DUMP_STOP)
-  {
-    timer = 0;
-    state = 1;
-  }
-  else
-  {
-    controlWord += DRAIN_ON;
-    controlWord += COLD_ON;
-  }
-}
 
 //=======================================================================
 // Frost detected, wait "n" scans to drain panel
@@ -464,7 +424,8 @@ void state10()
   timer++;
   if (timer < DRAIN_TIMEOUT)
   {
-    controlWord += DRAIN_ON;
+    // Drain solenoid is latching
+    controlWord += DRAIN_OPEN;
     controlWord += VENT_ON;
   }
   else
@@ -496,20 +457,19 @@ void state11()
 }
 
 //=======================================================================
-// Refill panel, open cold supply, open drain solenoid for a few seconds
-// to start flow
+// Refill panel, open cold supply, close drain solenoid as it's latching
 //=======================================================================
 void state12()
 {
   timer++;
-  if (timer < REFILL_DRAIN_TIME)
+  if (timer < REFILL_DRAIN_CLOSE_TIME)
   {
-    // Drain for a few seconds
-    controlWord += DRAIN_ON;
+    controlWord += DRAIN_CLOSE;
     controlWord += COLD_ON;
   }
   else if (timer < REFILL_WAITTIME)
   {
+    controlWord += DRAIN_CLOSE;
     controlWord += COLD_ON;
     controlWord += PUMP_ON;
   }
@@ -673,31 +633,6 @@ void setWetbackOrSolarStates()
   }
 }
 
-
-void checkCirculationPump()
-{
-  if (circulating)
-  {
-    // Still circulating, check to see if time to stop
-    if (solar_cyl_temp < (main_cyl_temp + HWC_CIRC_STOP_DIFF))
-    {
-      circulating = false;
-    }
-    else
-    {
-      // Keep pumping
-      controlWord += HWC_PUMP;
-    }
-  }
-  else
-  {
-    // Not circulating
-    if (solar_cyl_temp > (main_cyl_temp + HWC_CIRC_START_DIFF))
-    {
-      circulating = true;
-    }
-  }
-}
 
 void outputReadingsJson()
 {
