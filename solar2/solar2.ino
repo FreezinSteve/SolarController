@@ -729,8 +729,11 @@ void processCommand()
   }
 }
 
+
 void checkDrainSwitch()
 {
+  static bool lastStateDRAIN = false;
+  
   if (digitalRead(DRAIN_SWITCH) == LOW)
   {
     // Manual drain switch ON
@@ -742,18 +745,18 @@ void checkDrainSwitch()
       state = 10;
       timer = 0;
     }
+    lastStateDRAIN = true;
   }
   else
   {
-    // Manual drain switch OFF
-    if (state == 10)
+    if (lastStateDRAIN && state == 10)
     {
-      //Serial.println("#DRAINOFF");
-      // Force into state 11. If the panel is warm enough control will restart and
-      // the panel refilled
+      // Switch has just been switched from drain, immediately try to 
+      // refill panel. This will happen if panel temp is high enough
       state = 11;
       timer = 0;
     }
+    lastStateDRAIN = false;
   }
 }
 
