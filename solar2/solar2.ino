@@ -10,10 +10,10 @@
 
    Outputs:
    - Pump
-   - Drain solenoid
+   - Open drain
    - Bypass solenoid
    - Pump Supply (cold supply to pump)
-   - Vent solenoid
+   - Close drain
    - HWC Control
    -
 
@@ -56,10 +56,10 @@ const int DRAIN_SWITCH = 6;
 
 // HSIO Relay module output BIT mapping
 const unsigned int PUMP_ON = 32768;  // RELAY 1
-const unsigned int DRAIN_ON = 16384; // RELAY 2
+const unsigned int DRAIN_OPEN_ON = 16384; // RELAY 2
 const unsigned int BYPASS_ON = 8192; // RELAY 3
 const unsigned int COLD_ON = 4096;   // RELAY 4
-const unsigned int VENT_ON = 2048;   // RELAY 5
+const unsigned int DRAIN_CLOSE_ON = 2048;   // RELAY 5
 const unsigned int HWC_ON = 1024;    // RELAY 6
 const unsigned int HWC_PUMP = 512;    // RELAY 7
 
@@ -75,11 +75,11 @@ const float PANEL_MAX = 95;
 const float PANEL_DIFF = 5;            // If SOLAR_OUT + PANEL_DIFF > PANEL_TEMP then pump
 const float PANEL_FROST = 5;
 const float PANEL_DEFROST = 30;
-const int DRAIN_TIMEOUT  = 60;        // Drain time in seconds
+const int DRAIN_TIMEOUT  = 180;        // Drain time in seconds
 const int DRAIN_RETRY = 3600;         // Retry drain every hour
 const int HOT_COLD_DIFF = 1;          // If HOT_IN < COLD_OUT + HOT_COLD_DIFF then stop pumping
-const int MAX_PUMP_RUNTIME = 300;     // 300 cycles ~ 5 minutes
-const int MAX_PUMP_WAITTIME = 150;    // 300 cycles ~ 2.5 minutes
+const int MAX_PUMP_RUNTIME = 600;     // 600 cycles ~ 10 minutes
+const int MAX_PUMP_WAITTIME = 60;     // 60 cycles ~ 1 minutes
 const int MAX_BYPASS_WAITTIME = 60;
 const int REFILL_DRAIN_TIME = 5;      // Drain for a few seconds while refilling to get water flowing
 const int REFILL_WAITTIME = 60;
@@ -451,31 +451,27 @@ void state6()
   }
   else
   {
-    controlWord += DRAIN_ON;
+    controlWord += DRAIN_OPEN_ON;
     controlWord += COLD_ON;
   }
 }
 
 //=======================================================================
-// Frost detected, wait "n" scans to drain panel
+// Frost detected, drain panel
 //=======================================================================
 void state10()
 {
   timer++;
-  if (timer < DRAIN_TIMEOUT)
-  {
-    controlWord += DRAIN_ON;
-    controlWord += VENT_ON;
-  }
-  else
+  if (timer >= DRAIN_TIMEOUT)
   {
     state = 11;
     timer = 0;
   }
+  controlWord += DRAIN_OPEN_ON;
 }
 
 //=======================================================================
-// Panel drained, wait for warm temperatures. Retry every 'n' seconds
+// Panel drained, wait for warm temperatures
 //=======================================================================
 void state11()
 {
@@ -484,15 +480,7 @@ void state11()
     state = 12;
     timer = 0;
   }
-  else
-  {
-    timer++;
-    if (timer > DRAIN_RETRY)
-    {
-      state = 10;
-      timer = 0;
-    }
-  }
+  controlWord += DRAIN_OPEN_ON;
 }
 
 //=======================================================================
@@ -504,8 +492,8 @@ void state12()
   timer++;
   if (timer < REFILL_DRAIN_TIME)
   {
-    // Drain for a few seconds
-    controlWord += DRAIN_ON;
+    // Drain for a few seconds with the cold solenoid open
+    controlWord += DRAIN_OPEN_ON;
     controlWord += COLD_ON;
   }
   else if (timer < REFILL_WAITTIME)
@@ -547,6 +535,13 @@ void sensorError()
 //=======================================================================
 void setOutputs()
 {
+  // DRAIN_CLOSE ON IS NEVER EXPLICITLY SET IN THE STATE MACHINE. WE JUST USE DRAIN_OPEN_ON AS THE FLAG FOR DRAIN OR NOT DRAIN
+  if ((controlWord & DRAIN_OPEN_ON) == 0)
+  {
+    // DRAIN_OPEN_ON is not set, close the drain
+    controlWord += DRAIN_CLOSE_ON;
+  }
+
   // Bitbash controlWord out using HSIO
   // Raise SYNC
 
@@ -796,6 +791,8 @@ void processCommand()
 
 void checkDrainSwitch()
 {
+  static bool lastStateDRAIN = false;
+
   if (digitalRead(DRAIN_SWITCH) == LOW)
   {
     // Manual drain switch ON
@@ -807,18 +804,18 @@ void checkDrainSwitch()
       state = 10;
       timer = 0;
     }
+    lastStateDRAIN = true;
   }
   else
   {
-    // Manual drain switch OFF
-    if (state == 10)
+    if (lastStateDRAIN && state == 10)
     {
-      //Serial.println("#DRAINOFF");
-      // Force into state 11. If the panel is warm enough control will restart and
-      // the panel refilled
+      // Switch has just been switched from drain, immediately try to
+      // refill panel. This will happen if panel temp is high enough
       state = 11;
       timer = 0;
     }
+    lastStateDRAIN = false;
   }
 }
 
