@@ -56,11 +56,8 @@ const int DRAIN_SWITCH = 6;
 
 // HSIO Relay module output BIT mapping
 const unsigned int PUMP_ON = 32768;  // RELAY 1
-<<<<<<< HEAD
 const unsigned int DRAIN_OPEN_ON = 16384; // RELAY 2
-=======
 const unsigned int DRAIN_OPEN = 16384; // RELAY 2
->>>>>>> 09853d99304dc8c662e5ab8ac3431de3c8922653
 const unsigned int BYPASS_ON = 8192; // RELAY 3
 const unsigned int COLD_ON = 4096;   // RELAY 4
 const unsigned int DRAIN_CLOSE_ON = 2048;   // RELAY 5
@@ -419,14 +416,13 @@ void state4()
   }
 }
 
-<<<<<<< HEAD
 //=======================================================================
 // Solar cylinder over temperature. Drain until below safe level
 //=======================================================================
 void state6()
 {
   // Check for solar cylinder temperature dropped to safe level
-  if (solar_cyl_temp < SOLAR_DUMP_STOP)
+  if (solar_cyl_temp < 95)
   {
     timer = 0;
     state = 1;
@@ -437,8 +433,6 @@ void state6()
     controlWord += COLD_ON;
   }
 }
-=======
->>>>>>> 09853d99304dc8c662e5ab8ac3431de3c8922653
 
 //=======================================================================
 // Frost detected, drain panel
@@ -446,19 +440,8 @@ void state6()
 void state10()
 {
   timer++;
-<<<<<<< HEAD
   if (timer >= DRAIN_TIMEOUT)
-=======
-  if (timer < DRAIN_TIMEOUT)
-  {
-    // Drain solenoid is latching
-    controlWord += DRAIN_OPEN;
-    controlWord += VENT_ON;
-  }
-  else
->>>>>>> 09853d99304dc8c662e5ab8ac3431de3c8922653
-  {
-    state = 11;
+  { state = 11;
     timer = 0;
   }
   controlWord += DRAIN_OPEN_ON;
@@ -485,17 +468,12 @@ void state12()
   timer++;
   if (timer < REFILL_DRAIN_CLOSE_TIME)
   {
-<<<<<<< HEAD
     // Drain for a few seconds with the cold solenoid open
     controlWord += DRAIN_OPEN_ON;
-=======
-    controlWord += DRAIN_CLOSE;
->>>>>>> 09853d99304dc8c662e5ab8ac3431de3c8922653
     controlWord += COLD_ON;
   }
   else if (timer < REFILL_WAITTIME)
   {
-    controlWord += DRAIN_CLOSE;
     controlWord += COLD_ON;
     controlWord += PUMP_ON;
   }
@@ -766,11 +744,6 @@ void processCommand()
 void checkDrainSwitch()
 {
   static bool lastStateDRAIN = false;
-<<<<<<< HEAD
-
-=======
-  
->>>>>>> 09853d99304dc8c662e5ab8ac3431de3c8922653
   if (digitalRead(DRAIN_SWITCH) == LOW)
   {
     // Manual drain switch ON
@@ -788,11 +761,7 @@ void checkDrainSwitch()
   {
     if (lastStateDRAIN && state == 10)
     {
-<<<<<<< HEAD
       // Switch has just been switched from drain, immediately try to
-=======
-      // Switch has just been switched from drain, immediately try to 
->>>>>>> 09853d99304dc8c662e5ab8ac3431de3c8922653
       // refill panel. This will happen if panel temp is high enough
       state = 11;
       timer = 0;
