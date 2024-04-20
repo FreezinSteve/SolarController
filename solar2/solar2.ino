@@ -75,7 +75,7 @@ const int EEPROM_ADDR = 0;
 const float PANEL_DIFF = 5;            // If SOLAR_OUT + PANEL_DIFF > PANEL_TEMP then pump
 const float PANEL_FROST = 5;
 const float PANEL_DEFROST = 30;
-const int DRAIN_TIMEOUT  = 180;        // Drain time in seconds
+const int DRAIN_TIMEOUT  = 30;        // Drain time in seconds (latching solenoid, so doesn't really matter how long
 const int DRAIN_RETRY = 3600;         // Retry drain every hour
 const int HOT_COLD_DIFF = 1;          // If HOT_IN < COLD_OUT + HOT_COLD_DIFF then stop pumping
 const int MAX_PUMP_RUNTIME = 600;     // 600 cycles ~ 10 minutes
@@ -91,7 +91,7 @@ const int HWC_BOOST_RESET = 60;       // Turn off HWC boost above this
 const int HWC_LOWBOOST_RISE = 10;     // Auto boost, raise up by 'n' before clearing down boost
 const int HWC_CIRC_START_DIFF = 10;   // Start HWC circulation pump if diff > 'x'
 const int HWC_CIRC_STOP_DIFF = 5;     // Stop HWC circulation pump if diff < 'x'
-
+const int SOL_ACT_TIME = 10;          // 10 seconds to actuate the latching solenoids/valves
 const int SOLAR_ON_MAXTIMER = 3600;   // After "n" then assume that there's no solar available
 
 // resistance at 25 degrees C
@@ -429,7 +429,10 @@ void state6()
   }
   else
   {
-    controlWord += DRAIN_OPEN_ON;
+    if (timer < SOL_ACT_TIME)
+    {
+      controlWord += DRAIN_OPEN_ON;
+    }
     controlWord += COLD_ON;
   }
 }
@@ -444,7 +447,10 @@ void state10()
   { state = 11;
     timer = 0;
   }
-  controlWord += DRAIN_OPEN_ON;
+  if (timer < SOL_ACT_TIME)
+  {
+    controlWord += DRAIN_OPEN_ON;
+  }
 }
 
 //=======================================================================
@@ -452,14 +458,16 @@ void state10()
 //=======================================================================
 void state11()
 {
-  if (panel_temp > PANEL_DEFROST)
+  // If DRAIN switch set to DRAIN, then stay at state 11
+  if (digitalRead(DRAIN_SWITCH) == HIGH)
   {
-    state = 12;
-    timer = 0;
+    if (panel_temp > PANEL_DEFROST)
+    {
+      state = 12;
+      timer = 0;
+    }
   }
-  controlWord += DRAIN_OPEN_ON;
 }
-
 //=======================================================================
 // Refill panel, open cold supply, close drain solenoid as it's latching
 //=======================================================================
@@ -469,11 +477,18 @@ void state12()
   if (timer < REFILL_DRAIN_CLOSE_TIME)
   {
     // Drain for a few seconds with the cold solenoid open
-    controlWord += DRAIN_OPEN_ON;
+    if (timer < SOL_ACT_TIME)
+    {
+      controlWord += DRAIN_OPEN_ON;
+    }
     controlWord += COLD_ON;
   }
   else if (timer < REFILL_WAITTIME)
   {
+    if (timer < REFILL_DRAIN_CLOSE_TIME + SOL_ACT_TIME)
+    {
+      controlWord += DRAIN_CLOSE_ON;
+    }
     controlWord += COLD_ON;
     controlWord += PUMP_ON;
   }
@@ -511,13 +526,6 @@ void sensorError()
 //=======================================================================
 void setOutputs()
 {
-  // DRAIN_CLOSE ON IS NEVER EXPLICITLY SET IN THE STATE MACHINE. WE JUST USE DRAIN_OPEN_ON AS THE FLAG FOR DRAIN OR NOT DRAIN
-  if ((controlWord & DRAIN_OPEN_ON) == 0)
-  {
-    // DRAIN_OPEN_ON is not set, close the drain
-    controlWord += DRAIN_CLOSE_ON;
-  }
-
   // Bitbash controlWord out using HSIO
   // Raise SYNC
 
@@ -747,11 +755,10 @@ void checkDrainSwitch()
   if (digitalRead(DRAIN_SWITCH) == LOW)
   {
     // Manual drain switch ON
-    if (state != 10 && state != 11)
+    if (state < 10 || state > 11)
     {
       Serial.println("#DRAINON");
       Serial.println("#EMPTY");
-      // force into DRAIN state.
       state = 10;
       timer = 0;
     }
